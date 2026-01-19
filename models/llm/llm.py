@@ -784,30 +784,13 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
         if "verbosity" in model_parameters:
             del model_parameters["verbosity"]
 
-        # 1. Prepare input string from prompt messages
-        input_parts = []
-        role_map = {
-            UserPromptMessage: "user",
-            AssistantPromptMessage: "assistant",
-            ToolPromptMessage: "tool",
-        }
-        for m in prompt_messages:
-            role = role_map.get(type(m))
-            if not role:
+        # 1. Prepare input messages from prompt messages
+        input_messages = []
+        for prompt_message in prompt_messages:
+            message_payload = self._convert_prompt_message_to_responses_input(prompt_message)
+            if not message_payload:
                 continue
-
-            content_str = ""
-            if isinstance(m.content, str):
-                content_str = m.content
-            elif isinstance(m.content, list):
-                content_str = "\n".join(
-                    [item.data for item in m.content if item.type == PromptMessageContentType.TEXT]
-                )
-            
-            if content_str:
-                input_parts.append(f"{role}: {content_str}")
-        
-        final_input = "\n\n".join(input_parts)
+            input_messages.append(message_payload)
 
         # 2. Adapt parameters for responses.create
         response_params = model_parameters.copy()
@@ -822,9 +805,12 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
             response_params["tools"] = [{"type": "web_search"}]
 
         # 3. Call API
+        logger.debug(
+            "OpenAI responses.create request", extra={"model": model, "input": input_messages, "params": response_params}
+        )
         resp_obj = client.responses.create(
             model=model,
-            input=final_input,
+            input=input_messages,
             **response_params
         )
 
@@ -850,6 +836,107 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
         )
 
         return block_result
+
+    def _convert_prompt_message_to_responses_input(
+        self, message: PromptMessage
+    ) -> Optional[dict]:
+        if isinstance(message, SystemPromptMessage):
+            system_message = {
+                "role": "system",
+                "content": message.content,
+            }
+            if message.name:
+                system_message["name"] = message.name
+            return system_message
+
+        if isinstance(message, UserPromptMessage):
+            message = cast(UserPromptMessage, message)
+            message_name = message.name
+            if isinstance(message.content, str):
+                user_message = {
+                    "role": "user",
+                    "content": message.content,
+                }
+                if message_name:
+                    user_message["name"] = message_name
+                return user_message
+
+            input_content = []
+            assert isinstance(message.content, list)
+            for message_content in message.content:
+                if message_content.type == PromptMessageContentType.TEXT:
+                    message_content = cast(TextPromptMessageContent, message_content)
+                    input_content.append({
+                        "type": "input_text",
+                        "text": message_content.data,
+                    })
+                elif message_content.type == PromptMessageContentType.IMAGE:
+                    message_content = cast(ImagePromptMessageContent, message_content)
+                    input_content.append({
+                        "type": "input_image",
+                        "image_url": {
+                            "url": message_content.data,
+                            "detail": message_content.detail.value,
+                        },
+                    })
+                elif isinstance(message_content, AudioPromptMessageContent):
+                    data_split = message_content.data.split(";base64,")
+                    base64_data = data_split[1]
+                    input_content.append({
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": base64_data,
+                            "format": message_content.format,
+                        },
+                    })
+
+            user_message = {
+                "role": "user",
+                "content": input_content,
+            }
+            if message_name:
+                user_message["name"] = message_name
+            return user_message
+
+        if isinstance(message, AssistantPromptMessage):
+            message = cast(AssistantPromptMessage, message)
+            message_dict: dict[str, Any] = {
+                "role": "assistant",
+                "content": message.content,
+            }
+            if message.name:
+                message_dict["name"] = message.name
+
+            if message.tool_calls:
+                message_dict["tool_calls"] = []
+                for tool_call in message.tool_calls:
+                    if not tool_call.function:
+                        continue
+                    message_dict["tool_calls"].append(
+                        {
+                            "id": tool_call.id,
+                            "type": tool_call.type or "function",
+                            "function": {
+                                "name": tool_call.function.name,
+                                "arguments": tool_call.function.arguments,
+                            },
+                        }
+                    )
+
+            return message_dict
+
+        if isinstance(message, ToolPromptMessage):
+            message = cast(ToolPromptMessage, message)
+            tool_message = {
+                "role": "tool",
+                "content": message.content,
+                "tool_call_id": message.tool_call_id,
+            }
+            if message.name:
+                tool_message["name"] = message.name
+            return tool_message
+
+        return None
 
     def _handle_chat_block_as_stream_response(
         self,
