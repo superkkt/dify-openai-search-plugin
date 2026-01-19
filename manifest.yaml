@@ -1,4 +1,4 @@
-version: 0.2.8
+version: 0.2.8-9
 type: plugin
 author: "superkkt"
 name: "openai-search"
@@ -21,7 +21,7 @@ plugins:
   models:
     - "provider/openai.yaml"
 meta:
-  version: 0.0.1
+  version: 0.0.1-9
   arch:
     - "amd64"
     - "arm64"

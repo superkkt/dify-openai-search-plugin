@@ -2,7 +2,7 @@ from decimal import Decimal
 import json
 import logging
 from collections.abc import Generator
-from typing import Optional, Union, cast, Any
+from typing import Optional, Union, cast, Any, TypedDict
 import tiktoken
 
 from openai import OpenAI
@@ -65,6 +65,9 @@ if you are not sure about the structure.
 # thinking models compatibility for max_completion_tokens (all starting with "o" or "gpt-5")
 THINKING_SERIES_COMPATIBILITY = ("o", "gpt-5")
 
+class WebSearchOptions(TypedDict):
+    search_context_size: str
+
 class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
     """
     Model class for OpenAI large language model.
@@ -105,7 +108,7 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
             stream = False
 
         # get model mode
-        model_mode = self.get_model_mode(base_model, credentials)
+        model_mode = self.get_model_mode(base_model, credentials)   
 
         if model_mode == LLMMode.CHAT:
             # chat model
@@ -487,9 +490,6 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
         if stream:
             extra_model_kwargs["stream_options"] = {"include_usage": True}
 
-        # OpenAI 네이티브 검색을 사용
-        extra_model_kwargs["web_search_options"] = {"search_context_size": "medium"}
-
         # text completion model
         assert isinstance(prompt_messages[0].content, str)
 
@@ -729,10 +729,7 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
             extra_model_kwargs["user"] = user
 
         if stream:
-            extra_model_kwargs["stream_options"] = {"include_usage": True}
-
-        # OpenAI 네이티브 검색을 사용
-        extra_model_kwargs["web_search_options"] = {"search_context_size": "medium"}
+            extra_model_kwargs["stream_options"] = {"include_usage": True}       
 
         # clear illegal prompt messages
         prompt_messages = self._clear_illegal_prompt_messages(model, prompt_messages)
@@ -749,36 +746,18 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
             if "stop" in extra_model_kwargs:
                 del extra_model_kwargs["stop"]
 
-        if "o3-pro" in model:
-            block_result = self._chat_generate_o3_pro(
-                model=model,
-                credentials=credentials,
-                prompt_messages=prompt_messages,
-                model_parameters=model_parameters,
-                client=client,
-                user=user,
-            )
-        else:
-            # chat model
-            messages: Any = [self._convert_prompt_message_to_dict(m) for m in prompt_messages]
-            
-            try:
-                response = client.chat.completions.create(
-                    messages=messages,
-                    model=model,
-                    stream=stream,
-                    **model_parameters,
-                    **extra_model_kwargs,
-                )
-                
-            except Exception as e:
-                raise
-
-            if stream:
-                logger.info(f"OpenAI API Response - Stream response initiated for model: {model}")
-                return self._handle_chat_generate_stream_response(model, credentials, response, prompt_messages, tools)
-
-            block_result = self._handle_chat_generate_response(model, credentials, response, prompt_messages, tools)
+        # 원래 o3 모델만 한정해서 아래 함수를 통해 Response API를 호출하도록 되어있고, 나머지 모든 모델에 대해서는
+        # Chat completion API를 사용하도록 구현되어 있었다. 하지만 Chat completion API에서는 네이티브 검색 기능을
+        # 일부 모델에 대해서만 제한적으로 사용할 수 있고, 최신 모델에서 검색 기능을 사용하려면 Response API를 사용해야만 한다.
+        # 그래서 이 코드에서는 무조건 Response API를 호출하도록 수정하였다. 
+        block_result = self._chat_generate_o3_pro(
+            model=model,
+            credentials=credentials,
+            prompt_messages=prompt_messages,
+            model_parameters=model_parameters,
+            client=client,
+            user=user,
+        )
 
         if block_as_stream:
             return self._handle_chat_block_as_stream_response(block_result, prompt_messages, stop)
@@ -797,6 +776,14 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
         """
         Invoke o3-pro model using responses.create API.
         """
+
+        # Response API는 reasoning_effor 파라메터가 없고 대신 reasoning.effort를 사용해야 한다.
+        if "reasoning_effort" in model_parameters:
+            model_parameters["reasoning"] = {"effort": model_parameters["reasoning_effort"]}
+            del model_parameters["reasoning_effort"]
+        if "verbosity" in model_parameters:
+            del model_parameters["verbosity"]
+
         # 1. Prepare input string from prompt messages
         input_parts = []
         role_map = {
@@ -828,6 +815,11 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
             response_params["max_output_tokens"] = response_params.pop("max_completion_tokens")
         if user:
             response_params['user'] = user
+
+        if "tools" in response_params:
+            response_params["tools"].append({"type": "web_search"})
+        else:
+            response_params["tools"] = [{"type": "web_search"}]
 
         # 3. Call API
         resp_obj = client.responses.create(
