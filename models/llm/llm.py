@@ -1361,13 +1361,26 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
                         message_content = cast(
                             ImagePromptMessageContent, message_content
                         )
-                        sub_message_dict = {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": message_content.data,
-                                "detail": message_content.detail.value,
-                            },
-                        }
+
+                        if message_content.data.startswith("data:"):
+                            # Extract from data URI
+                            header, encoded = message_content.data.split(";base64,", 1)
+                            mime_type = header.replace("data:", "")
+                            sub_message_dict = {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{mime_type};base64,{encoded}",
+                                    "detail": message_content.detail.value,
+                                },
+                            }                    
+                        else:
+                            sub_message_dict = {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": message_content.data,
+                                    "detail": message_content.detail.value,
+                                },
+                            }
                         sub_messages.append(sub_message_dict)
                     elif isinstance(message_content, AudioPromptMessageContent):
                         data_split = message_content.data.split(";base64,")
