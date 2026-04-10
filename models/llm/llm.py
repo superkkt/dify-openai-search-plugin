@@ -872,13 +872,25 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
                     })
                 elif message_content.type == PromptMessageContentType.IMAGE:
                     message_content = cast(ImagePromptMessageContent, message_content)
-                    input_content.append({
-                        "type": "input_image",
-                        "image_url": {
-                            "url": message_content.data,
-                            "detail": message_content.detail.value,
-                        },
-                    })
+                    if message_content.data.startswith("data:"):
+                        # Extract from data URI
+                        header, encoded = data.split(";base64,", 1)
+                        mime_type = header.replace("data:", "")
+                        input_content.append({
+                            "type": "input_image",
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{encoded}"
+                                "detail": message_content.detail.value,
+                            },
+                        })                        
+                    else:
+                        input_content.append({
+                            "type": "input_image",
+                            "image_url": {
+                                "url": message_content.data,
+                                "detail": message_content.detail.value,
+                            },
+                        })
                 elif isinstance(message_content, AudioPromptMessageContent):
                     data_split = message_content.data.split(";base64,")
                     base64_data = data_split[1]
