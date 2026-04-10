@@ -874,12 +874,12 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
                     message_content = cast(ImagePromptMessageContent, message_content)
                     if message_content.data.startswith("data:"):
                         # Extract from data URI
-                        header, encoded = data.split(";base64,", 1)
+                        header, encoded = message_content.data.split(";base64,", 1)
                         mime_type = header.replace("data:", "")
                         input_content.append({
                             "type": "input_image",
                             "image_url": {
-                                "url": f"data:{mime_type};base64,{encoded}"
+                                "url": f"data:{mime_type};base64,{encoded}",
                                 "detail": message_content.detail.value,
                             },
                         })                        
